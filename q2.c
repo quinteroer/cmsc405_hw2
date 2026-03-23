@@ -1,12 +1,14 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdbool.h>
 #include <time.h>
 
 #define N 5
 #define NUM_READERS 20
 #define NUM_WRITERS 10
+#define LOG_FILE "reader_writer_q2.log"
 
 /* ── Barz counting semaphore (Implementation 2 from notes) ──
  *
@@ -29,33 +31,32 @@
  *   V(mutex)
  */
 
- 
 typedef struct {
     int val;
-    sem_t gate;    // open if val > 0, closed if val == 0
-    sem_t mutex;   // protects val
+    sem_t gate;
+    sem_t mutex;
 } counting_sem_t;
 
 void csem_init(counting_sem_t *cs, int k) {
     cs->val = k;
-    sem_init(&cs->gate,  0, k > 0 ? 1 : 0);  // min(1, k)
+    sem_init(&cs->gate,  0, k > 0 ? 1 : 0);
     sem_init(&cs->mutex, 0, 1);
 }
 
-void csem_wait(counting_sem_t *cs) {      // Pc
-    sem_wait(&cs->gate);                  // block before touching val
+void csem_wait(counting_sem_t *cs) {
+    sem_wait(&cs->gate);
     sem_wait(&cs->mutex);
     cs->val--;
     if (cs->val > 0)
-        sem_post(&cs->gate);              // more slots remain, reopen
+        sem_post(&cs->gate);
     sem_post(&cs->mutex);
 }
 
-void csem_post(counting_sem_t *cs) {      // Vc
+void csem_post(counting_sem_t *cs) {
     sem_wait(&cs->mutex);
     cs->val++;
     if (cs->val == 1)
-        sem_post(&cs->gate);              // just went 0→1, open gate
+        sem_post(&cs->gate);
     sem_post(&cs->mutex);
 }
 
@@ -68,21 +69,43 @@ void csem_destroy(counting_sem_t *cs) {
 counting_sem_t readerLimit;
 counting_sem_t wrt;
 pthread_mutex_t mutex;
+FILE *logfile;
 
 int cnt       = 1;
 int numreader = 0;
 bool test_succeeded = true;
 
+double average_blocked_wait_time_s             = 0.0;
 double average_blocked_wait_time_numerator     = 0.0;
 int    average_blocked_wait_time_denominator   = 0;
+double average_unblocked_wait_time_s           = 0.0;
 double average_unblocked_wait_time_numerator   = 0.0;
 int    average_unblocked_wait_time_denominator = 0;
+
+/* ── Logging ── */
+void log_print(const char *fmt, ...) {
+    va_list args1, args2;
+    va_start(args1, fmt);
+    va_copy(args2, args1);
+    vprintf(fmt, args1);
+    vfprintf(logfile, fmt, args2);
+    va_end(args1);
+    va_end(args2);
+}
 
 /* ── Writer ── */
 void *writer(void *wno) {
     csem_wait(&wrt);
     cnt = cnt * 2;
-    printf("Writer %d modified cnt to %d\n", *((int *)wno), cnt);
+
+    pthread_mutex_lock(&mutex);
+    log_print("| %-8s | %-10s | %-14s | %-10d | %-10s |\n",
+              "WRITER", "WRITE", "-", cnt, "-");
+    pthread_mutex_unlock(&mutex);
+
+    struct timespec work_time = {2, 0};
+    nanosleep(&work_time, NULL);
+
     csem_post(&wrt);
     return NULL;
 }
@@ -100,24 +123,28 @@ void *reader(void *rno) {
     csem_wait(&readerLimit);
     clock_gettime(CLOCK_MONOTONIC, &time_end);
 
-    double time_waited_ns = (time_end.tv_sec - time_start.tv_sec) * 1e9 +
-                            (time_end.tv_nsec - time_start.tv_nsec);
+    double time_waited_s = (time_end.tv_sec - time_start.tv_sec) +
+                           (time_end.tv_nsec - time_start.tv_nsec) / 1e9;
 
     pthread_mutex_lock(&mutex);
 
     if (will_wait) {
-        printf("Reader %d BLOCKED and waited %.2f ns.\n", *((int *)rno), time_waited_ns);
-        average_blocked_wait_time_numerator += time_waited_ns;
+        average_blocked_wait_time_numerator += time_waited_s;
         average_blocked_wait_time_denominator++;
     } else {
-        printf("Reader %d acquired immediately (%.2f ns overhead).\n", *((int *)rno), time_waited_ns);
-        average_unblocked_wait_time_numerator += time_waited_ns;
+        average_unblocked_wait_time_numerator += time_waited_s;
         average_unblocked_wait_time_denominator++;
     }
 
     numreader++;
     if (numreader > N) test_succeeded = false;
-    printf("  Reader %d ENTERED (active readers: %d)\n", *((int *)rno), numreader);
+
+    log_print("| %-8d | %-10s | %-14s | %-10d | %-10.6f |\n",
+              *((int *)rno),
+              "ENTER",
+              will_wait ? "BLOCKED" : "IMMEDIATE",
+              numreader,
+              time_waited_s);
 
     // NOTE: csem_wait called inside mutex — safe only because writers never acquire mutex
     if (numreader == 1)
@@ -125,12 +152,19 @@ void *reader(void *rno) {
 
     pthread_mutex_unlock(&mutex);
 
-    printf("Reader %d: read cnt as %d\n", *((int *)rno), cnt);
-    struct timespec sleep_time = {0, 5000000};  // 5ms simulated read
-    nanosleep(&sleep_time, NULL);
+    // Reading section
+    pthread_mutex_lock(&mutex);
+    log_print("| %-8d | %-10s | %-14s | %-10d | %-10s |\n",
+              *((int *)rno), "READ", "-", cnt, "-");
+    pthread_mutex_unlock(&mutex);
+
+    struct timespec work_time = {2, 0};
+    nanosleep(&work_time, NULL);
 
     pthread_mutex_lock(&mutex);
     numreader--;
+    log_print("| %-8d | %-10s | %-14s | %-10d | %-10s |\n",
+              *((int *)rno), "EXIT", "-", numreader, "-");
     if (numreader == 0)
         csem_post(&wrt);
     pthread_mutex_unlock(&mutex);
@@ -141,6 +175,18 @@ void *reader(void *rno) {
 
 /* ── Main ── */
 int main() {
+    logfile = fopen(LOG_FILE, "w");
+    if (!logfile) {
+        perror("Failed to open log file");
+        return 1;
+    }
+
+    char *divider = "+----------+------------+----------------+------------+------------+\n";
+    log_print("%s", divider);
+    log_print("| %-8s | %-10s | %-14s | %-10s | %-10s |\n",
+              "THREAD", "EVENT", "WAIT TYPE", "VAL/ACTIVE", "WAIT (s)");
+    log_print("%s", divider);
+
     csem_init(&readerLimit, N);
     csem_init(&wrt, 1);
     pthread_mutex_init(&mutex, NULL);
@@ -158,17 +204,25 @@ int main() {
     for (int i = 0; i < NUM_READERS; i++) pthread_join(read[i],  NULL);
     for (int i = 0; i < NUM_WRITERS; i++) pthread_join(write[i], NULL);
 
-    printf("\n%s: No more than %d readers active simultaneously.\n",
-           test_succeeded ? "Test PASSED" : "Test FAILED", N);
+    if (average_blocked_wait_time_denominator > 0)
+        average_blocked_wait_time_s = average_blocked_wait_time_numerator / average_blocked_wait_time_denominator;
+    if (average_unblocked_wait_time_denominator > 0)
+        average_unblocked_wait_time_s = average_unblocked_wait_time_numerator / average_unblocked_wait_time_denominator;
 
-    double avg_blocked   = average_blocked_wait_time_denominator > 0
-                         ? average_blocked_wait_time_numerator / average_blocked_wait_time_denominator : 0.0;
-    double avg_unblocked = average_unblocked_wait_time_denominator > 0
-                         ? average_unblocked_wait_time_numerator / average_unblocked_wait_time_denominator : 0.0;
+    log_print("%s", divider);
+    log_print("\n=== SUMMARY (Barz Counting Semaphore) ===\n");
+    log_print("%-40s %s\n", "Result:",
+              test_succeeded ? "PASSED - reader cap never exceeded" : "FAILED - reader cap exceeded");
+    log_print("%-40s %d / %d readers\n", "Max concurrent readers allowed:", N, NUM_READERS);
+    log_print("%-40s %d\n", "Readers that blocked:",      average_blocked_wait_time_denominator);
+    log_print("%-40s %d\n", "Readers that didn't block:", average_unblocked_wait_time_denominator);
+    log_print("%-40s %.9f s\n", "Avg wait (BLOCKED):",   average_blocked_wait_time_s);
+    log_print("%-40s %.9f s\n", "Avg wait (UNBLOCKED):", average_unblocked_wait_time_s);
+    log_print("%-40s %.9f s\n", "Difference:",
+              average_blocked_wait_time_s - average_unblocked_wait_time_s);
 
-    printf("Average wait — BLOCKED:   %.2f ns  (n=%d)\n", avg_blocked,   average_blocked_wait_time_denominator);
-    printf("Average wait — UNBLOCKED: %.2f ns  (n=%d)\n", avg_unblocked, average_unblocked_wait_time_denominator);
-    printf("BLOCKED readers waited %.2f ns longer on average.\n", avg_blocked - avg_unblocked);
+    fclose(logfile);
+    printf("\nLog written to %s\n", LOG_FILE);
 
     csem_destroy(&readerLimit);
     csem_destroy(&wrt);
