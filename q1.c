@@ -81,7 +81,7 @@ void *reader(void *rno)
     pthread_mutex_unlock(&mutex);
 
     // Reading Section
-    printf("Reader %d: read cnt as %d\n",*((int *)rno),cnt);
+    printf("Reader %d: read cnt as %d\n\n",*((int *)rno),cnt);
 
     // Simulate work being done by the reader
     struct timespec work_time = {2, 0}; // 2 seconds
