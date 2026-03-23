@@ -3,6 +3,7 @@
 #include <stdio.h>
 #include <stdbool.h>
 #include <time.h>
+#include <stdarg.h>
 
 #define N 5
 #define NUM_READERS 20
