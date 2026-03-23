@@ -7,6 +7,7 @@
 #define N 5
 #define NUM_READERS 20
 #define NUM_WRITERS 10
+#define LOG_FILE "reader_writer_q1.log"
 
 sem_t readerLimit;
 sem_t wrt;
@@ -14,6 +15,7 @@ pthread_mutex_t mutex;
 int cnt = 1;
 int numreader = 0;
 bool test_succeeded = true;
+FILE *logfile;
 
 double average_blocked_wait_time_s = 0.0;
 double average_blocked_wait_time_numerator = 0.0;
@@ -29,6 +31,7 @@ void log_print(const char *fmt, ...) {
     va_start(args1, fmt);
     va_copy(args2, args1);
     vprintf(fmt, args1);
+    vfprintf(logfile, fmt, args2);
     va_end(args1);
     va_end(args2);
 }
