@@ -145,7 +145,7 @@ int main()
     printf("Average wait time for BLOCKED readers: %.2f ns\n", average_blocked_wait_time_ns);
     printf("Average wait time for UNBLOCKED readers: %.2f ns\n", average_unblocked_wait_time_ns);
 
-    printf("BLOCKED readers waited %.2f longer than UNBLOCKED readers on average.\n", 
+    printf("BLOCKED readers waited on average: %.2f ns longer than UNBLOCKED readers on average.\n", 
            (average_blocked_wait_time_ns - average_unblocked_wait_time_ns));
 
     pthread_mutex_destroy(&mutex);
