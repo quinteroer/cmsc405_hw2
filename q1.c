@@ -15,11 +15,11 @@ int cnt = 1;
 int numreader = 0;
 bool test_succeeded = true;
 
-double average_blocked_wait_time_ns = 0.0;
+double average_blocked_wait_time_s = 0.0;
 double average_blocked_wait_time_numerator = 0.0;
 int average_blocked_wait_time_denominator = 0;
 
-double average_unblocked_wait_time_ns = 0.0;
+double average_unblocked_wait_time_s = 0.0;
 double average_unblocked_wait_time_numerator = 0.0;
 int average_unblocked_wait_time_denominator = 0;
 
@@ -29,6 +29,11 @@ void *writer(void *wno)
     sem_wait(&wrt);
     cnt = cnt*2;
     printf("Writer %d modified cnt to %d\n",(*((int *)wno)),cnt);
+
+    // Simulate work being done by the writer
+    struct timespec work_time = {2, 0}; // 2 seconds
+    nanosleep(&work_time, NULL);
+
     sem_post(&wrt);
     return NULL;
 }
@@ -44,19 +49,19 @@ void *reader(void *rno)
     sem_wait(&readerLimit); // Wait if there are already N readers reading
     clock_gettime(CLOCK_MONOTONIC, &time_end); // End the timer after acquiring the readerLimit semaphore
 
-    double time_waited_ns = (time_end.tv_sec - time_start.tv_sec) * 1e9 + 
-                            (time_end.tv_nsec - time_start.tv_nsec);
+    double time_waited_s = (time_end.tv_sec - time_start.tv_sec) + 
+                           (time_end.tv_nsec - time_start.tv_nsec) / 1e9;
 
     pthread_mutex_lock(&mutex);
 
-    // calculate metrics for average wait time for blocked and unblocked readers
+    // Calculate metrics for average wait time for blocked and unblocked readers
     if (will_wait) {
-        printf("Reader %d BLOCKED and waited %.2f ns.\n", *((int *)rno), time_waited_ns);
-        average_blocked_wait_time_numerator += time_waited_ns;
+        printf("Reader %d BLOCKED and waited %.4f s.\n", *((int *)rno), time_waited_s);
+        average_blocked_wait_time_numerator += time_waited_s;
         average_blocked_wait_time_denominator++;
     } else {
-        printf("Reader %d acquired immediately (%.2f ns overhead).\n", *((int *)rno), time_waited_ns);
-        average_unblocked_wait_time_numerator += time_waited_ns;
+        printf("Reader %d acquired immediately (%.4f s overhead).\n", *((int *)rno), time_waited_s);
+        average_unblocked_wait_time_numerator += time_waited_s;
         average_unblocked_wait_time_denominator++;
     }
 
@@ -78,11 +83,11 @@ void *reader(void *rno)
     // Reading Section
     printf("Reader %d: read cnt as %d\n",*((int *)rno),cnt);
 
-    // Simulate reading time by sleeping for a short duration
-    struct timespec sleep_time = {0, 5000000}; // 5 milliseconds
-    nanosleep(&sleep_time, NULL);
+    // Simulate work being done by the reader
+    struct timespec work_time = {2, 0}; // 2 seconds
+    nanosleep(&work_time, NULL);
 
-    // Reader acquire the lock before modifying numreader
+    // Reader acquires the lock before modifying numreader
     pthread_mutex_lock(&mutex);
     numreader--;
     if(numreader == 0) {
@@ -135,18 +140,18 @@ int main()
     }
 
     if (average_blocked_wait_time_denominator > 0) {
-        average_blocked_wait_time_ns = average_blocked_wait_time_numerator / average_blocked_wait_time_denominator;
+        average_blocked_wait_time_s = average_blocked_wait_time_numerator / average_blocked_wait_time_denominator;
     }
 
     if (average_unblocked_wait_time_denominator > 0) {
-        average_unblocked_wait_time_ns = average_unblocked_wait_time_numerator / average_unblocked_wait_time_denominator;
+        average_unblocked_wait_time_s = average_unblocked_wait_time_numerator / average_unblocked_wait_time_denominator;
     }
 
-    printf("Average wait time for BLOCKED readers: %.2f ns\n", average_blocked_wait_time_ns);
-    printf("Average wait time for UNBLOCKED readers: %.2f ns\n", average_unblocked_wait_time_ns);
+    printf("Average wait time for BLOCKED readers: %.4f s\n", average_blocked_wait_time_s);
+    printf("Average wait time for UNBLOCKED readers: %.4f s\n", average_unblocked_wait_time_s);
 
-    printf("BLOCKED readers waited on average: %.2f ns longer than UNBLOCKED readers on average.\n", 
-           (average_blocked_wait_time_ns - average_unblocked_wait_time_ns));
+    printf("BLOCKED readers waited on average: %.4f s longer than UNBLOCKED readers on average.\n", 
+           (average_blocked_wait_time_s - average_unblocked_wait_time_s));
 
     pthread_mutex_destroy(&mutex);
     sem_destroy(&wrt);
