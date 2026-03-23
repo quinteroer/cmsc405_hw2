@@ -4,11 +4,11 @@
 #include <stdbool.h>
 #include <time.h>
 
-#define N 5 // Maximum number of readers that can read at the same time
+#define N 5
 #define NUM_READERS 20
 #define NUM_WRITERS 10
 
-sem_t readerLimit; // Semaphore to limit the number of readers that can read at the same time
+sem_t readerLimit;
 sem_t wrt;
 pthread_mutex_t mutex;
 int cnt = 1;
@@ -23,138 +23,147 @@ double average_unblocked_wait_time_s = 0.0;
 double average_unblocked_wait_time_numerator = 0.0;
 int average_unblocked_wait_time_denominator = 0;
 
+// Print and log a line to both stdout and the log file
+void log_print(const char *fmt, ...) {
+    va_list args1, args2;
+    va_start(args1, fmt);
+    va_copy(args2, args1);
+    vprintf(fmt, args1);
+    va_end(args1);
+    va_end(args2);
+}
 
-void *writer(void *wno)
-{   
+void *writer(void *wno) {
     sem_wait(&wrt);
-    cnt = cnt*2;
-    printf("Writer %d modified cnt to %d\n",(*((int *)wno)),cnt);
+    cnt = cnt * 2;
 
-    // Simulate work being done by the writer
-    struct timespec work_time = {2, 0}; // 2 seconds
+    pthread_mutex_lock(&mutex);
+    log_print("| %-8s | %-10s | %-14s | %-10d | %-10s |\n",
+              "WRITER", "WRITE", "-", cnt, "-");
+    pthread_mutex_unlock(&mutex);
+
+    struct timespec work_time = {2, 0};
     nanosleep(&work_time, NULL);
 
     sem_post(&wrt);
     return NULL;
 }
-void *reader(void *rno)
-{   
+
+void *reader(void *rno) {
     int sval;
     struct timespec time_start, time_end;
 
     sem_getvalue(&readerLimit, &sval);
     int will_wait = (sval == 0);
 
-    clock_gettime(CLOCK_MONOTONIC, &time_start); // Start the timer to measure how long the reader waits
-    sem_wait(&readerLimit); // Wait if there are already N readers reading
-    clock_gettime(CLOCK_MONOTONIC, &time_end); // End the timer after acquiring the readerLimit semaphore
+    clock_gettime(CLOCK_MONOTONIC, &time_start);
+    sem_wait(&readerLimit);
+    clock_gettime(CLOCK_MONOTONIC, &time_end);
 
-    double time_waited_s = (time_end.tv_sec - time_start.tv_sec) + 
+    double time_waited_s = (time_end.tv_sec - time_start.tv_sec) +
                            (time_end.tv_nsec - time_start.tv_nsec) / 1e9;
 
     pthread_mutex_lock(&mutex);
 
-    // Calculate metrics for average wait time for blocked and unblocked readers
     if (will_wait) {
-        printf("Reader %d BLOCKED and waited %.4f s.\n", *((int *)rno), time_waited_s);
         average_blocked_wait_time_numerator += time_waited_s;
         average_blocked_wait_time_denominator++;
     } else {
-        printf("Reader %d acquired immediately (%.4f s overhead).\n", *((int *)rno), time_waited_s);
         average_unblocked_wait_time_numerator += time_waited_s;
         average_unblocked_wait_time_denominator++;
     }
 
-    // Get the current value of readerLimit to calculate the number of active readers
     sem_getvalue(&readerLimit, &sval);
-    printf("  Reader %d ENTERED (Slots active: %d)\n", *((int *)rno), N - sval);
-
-    // Check if the number of active readers exceeds N, which should not happen
     numreader++;
-    if (numreader > N) {
-        test_succeeded = false;
-    }
-    if(numreader == 1) {
-        sem_wait(&wrt); // If this is the first reader, then it will block the writer
-    }
+    if (numreader > N) test_succeeded = false;
+
+    log_print("| %-8d | %-10s | %-14s | %-10d | %-10.6f |\n",
+              *((int *)rno),
+              "ENTER",
+              will_wait ? "BLOCKED" : "IMMEDIATE",
+              numreader,
+              time_waited_s);
+
+    if (numreader == 1)
+        sem_wait(&wrt);
 
     pthread_mutex_unlock(&mutex);
 
-    // Reading Section
-    printf("Reader %d: read cnt as %d\n\n",*((int *)rno),cnt);
+    // Reading section
+    pthread_mutex_lock(&mutex);
+    log_print("| %-8d | %-10s | %-14s | %-10d | %-10s |\n",
+              *((int *)rno), "READ", "-", cnt, "-");
+    pthread_mutex_unlock(&mutex);
 
-    // Simulate work being done by the reader
-    struct timespec work_time = {2, 0}; // 2 seconds
+    struct timespec work_time = {2, 0};
     nanosleep(&work_time, NULL);
 
-    // Reader acquires the lock before modifying numreader
     pthread_mutex_lock(&mutex);
     numreader--;
-    if(numreader == 0) {
-        sem_post(&wrt); // If this is the last reader, it will wake up the writer.
-    }
-    
+    log_print("| %-8d | %-10s | %-14s | %-10d | %-10s |\n",
+              *((int *)rno), "EXIT", "-", numreader, "-");
+    if (numreader == 0)
+        sem_post(&wrt);
     pthread_mutex_unlock(&mutex);
 
-    sem_post(&readerLimit); // Signal that this reader is done, allowing another reader to read
+    sem_post(&readerLimit);
     return NULL;
 }
 
-int main()
-{   
-    sem_init(&readerLimit,0,N);
-    pthread_t read[NUM_READERS],write[NUM_WRITERS];
+int main() {
+    logfile = fopen(LOG_FILE, "w");
+    if (!logfile) {
+        perror("Failed to open log file");
+        return 1;
+    }
+
+    // Print header
+    char *divider = "+----------+------------+----------------+------------+------------+\n";
+    log_print("%s", divider);
+    log_print("| %-8s | %-10s | %-14s | %-10s | %-10s |\n",
+              "THREAD", "EVENT", "WAIT TYPE", "VAL/ACTIVE", "WAIT (s)");
+    log_print("%s", divider);
+
+    sem_init(&readerLimit, 0, N);
     pthread_mutex_init(&mutex, NULL);
-    sem_init(&wrt,0,1);
+    sem_init(&wrt, 0, 1);
 
-    int a[NUM_READERS]; //Just used for numbering the producer and consumer
-    int b[NUM_WRITERS];
+    pthread_t read[NUM_READERS], write[NUM_WRITERS];
+    int a[NUM_READERS], b[NUM_WRITERS];
+    for (int i = 0; i < NUM_READERS; i++) a[i] = i + 1;
+    for (int i = 0; i < NUM_WRITERS;  i++) b[i] = i + 1;
 
-    for(int i = 0; i < NUM_READERS; i++) {
-        a[i] = i + 1;
-    }
-    for(int i = 0; i < NUM_WRITERS; i++) {
-        b[i] = i + 1;
-    }
-
-    for(int i = 0; i < NUM_READERS; i++) {
-        pthread_create(&read[i], NULL, (void *)reader, (void *)&a[i]);
-    }
-
-    for(int i = 0; i < NUM_WRITERS; i++) {
+    for (int i = 0; i < NUM_READERS; i++)
+        pthread_create(&read[i],  NULL, (void *)reader, (void *)&a[i]);
+    for (int i = 0; i < NUM_WRITERS; i++)
         pthread_create(&write[i], NULL, (void *)writer, (void *)&b[i]);
-    }
 
-    for(int i = 0; i < NUM_READERS; i++) {
-        pthread_join(read[i], NULL);
-    }
+    for (int i = 0; i < NUM_READERS; i++) pthread_join(read[i],  NULL);
+    for (int i = 0; i < NUM_WRITERS; i++) pthread_join(write[i], NULL);
 
-    for(int i = 0; i < NUM_WRITERS; i++) {
-        pthread_join(write[i], NULL);
-    }
-
-    if (test_succeeded) {
-        printf("Test succeeded: No more than %d readers were active at the same time.\n", N);
-    } else {
-        printf("Test failed: More than %d readers were active at the same time.\n", N);
-    }
-
-    if (average_blocked_wait_time_denominator > 0) {
+    // Summary
+    if (average_blocked_wait_time_denominator > 0)
         average_blocked_wait_time_s = average_blocked_wait_time_numerator / average_blocked_wait_time_denominator;
-    }
-
-    if (average_unblocked_wait_time_denominator > 0) {
+    if (average_unblocked_wait_time_denominator > 0)
         average_unblocked_wait_time_s = average_unblocked_wait_time_numerator / average_unblocked_wait_time_denominator;
-    }
 
-    printf("Average wait time for BLOCKED readers: %.9f s\n", average_blocked_wait_time_s);
-    printf("Average wait time for UNBLOCKED readers: %.9f s\n", average_unblocked_wait_time_s);
+    log_print("%s", divider);
+    log_print("\n=== SUMMARY ===\n");
+    log_print("%-40s %s\n", "Result:",
+              test_succeeded ? "PASSED - reader cap never exceeded" : "FAILED - reader cap exceeded");
+    log_print("%-40s %d / %d readers\n", "Max concurrent readers allowed:", N, NUM_READERS);
+    log_print("%-40s %d\n", "Readers that blocked:",   average_blocked_wait_time_denominator);
+    log_print("%-40s %d\n", "Readers that didn't block:", average_unblocked_wait_time_denominator);
+    log_print("%-40s %.9f s\n", "Avg wait (BLOCKED):",   average_blocked_wait_time_s);
+    log_print("%-40s %.9f s\n", "Avg wait (UNBLOCKED):", average_unblocked_wait_time_s);
+    log_print("%-40s %.9f s\n", "Difference:",
+              average_blocked_wait_time_s - average_unblocked_wait_time_s);
 
-    printf("BLOCKED readers waited on average: %.9f s longer than UNBLOCKED readers on average.\n", 
-           (average_blocked_wait_time_s - average_unblocked_wait_time_s));
+    fclose(logfile);
+    printf("\nLog written to %s\n", LOG_FILE);
 
     pthread_mutex_destroy(&mutex);
     sem_destroy(&wrt);
-    sem_destroy(&readerLimit); // Clean up the semaphore and mutex resources
+    sem_destroy(&readerLimit);
     return 0;
 }
