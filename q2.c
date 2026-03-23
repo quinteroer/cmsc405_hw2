@@ -68,7 +68,7 @@ void csem_destroy(counting_sem_t *cs) {
 /* ── Shared state ── */
 counting_sem_t readerLimit;
 counting_sem_t wrt;
-pthread_mutex_t mutex;
+counting_sem_t mutex;
 FILE *logfile;
 
 int cnt       = 1;
@@ -98,10 +98,10 @@ void *writer(void *wno) {
     csem_wait(&wrt);
     cnt = cnt * 2;
 
-    pthread_mutex_lock(&mutex);
+    csem_wait(&mutex);
     log_print("| %-8s | %-10s | %-14s | %-10d | %-10s |\n",
               "WRITER", "WRITE", "-", cnt, "-");
-    pthread_mutex_unlock(&mutex);
+    csem_post(&mutex);
 
     struct timespec work_time = {2, 0};
     nanosleep(&work_time, NULL);
@@ -126,7 +126,7 @@ void *reader(void *rno) {
     double time_waited_s = (time_end.tv_sec - time_start.tv_sec) +
                            (time_end.tv_nsec - time_start.tv_nsec) / 1e9;
 
-    pthread_mutex_lock(&mutex);
+    csem_wait(&mutex);
 
     if (will_wait) {
         average_blocked_wait_time_numerator += time_waited_s;
@@ -150,24 +150,24 @@ void *reader(void *rno) {
     if (numreader == 1)
         csem_wait(&wrt);
 
-    pthread_mutex_unlock(&mutex);
+    csem_post(&mutex);
 
     // Reading section
-    pthread_mutex_lock(&mutex);
+    csem_wait(&mutex);
     log_print("| %-8d | %-10s | %-14s | %-10d | %-10s |\n",
               *((int *)rno), "READ", "-", cnt, "-");
-    pthread_mutex_unlock(&mutex);
+    csem_post(&mutex);
 
     struct timespec work_time = {2, 0};
     nanosleep(&work_time, NULL);
 
-    pthread_mutex_lock(&mutex);
+    csem_wait(&mutex);
     numreader--;
     log_print("| %-8d | %-10s | %-14s | %-10d | %-10s |\n",
               *((int *)rno), "EXIT", "-", numreader, "-");
     if (numreader == 0)
         csem_post(&wrt);
-    pthread_mutex_unlock(&mutex);
+    csem_post(&mutex);
 
     csem_post(&readerLimit);
     return NULL;
@@ -189,7 +189,7 @@ int main() {
 
     csem_init(&readerLimit, N);
     csem_init(&wrt, 1);
-    pthread_mutex_init(&mutex, NULL);
+    csem_init(&mutex, 1);
 
     pthread_t read[NUM_READERS], write[NUM_WRITERS];
     int a[NUM_READERS], b[NUM_WRITERS];
@@ -226,6 +226,6 @@ int main() {
 
     csem_destroy(&readerLimit);
     csem_destroy(&wrt);
-    pthread_mutex_destroy(&mutex);
+    csem_destroy(&mutex);
     return 0;
 }
