@@ -147,10 +147,10 @@ int main()
         average_unblocked_wait_time_s = average_unblocked_wait_time_numerator / average_unblocked_wait_time_denominator;
     }
 
-    printf("Average wait time for BLOCKED readers: %.4f s\n", average_blocked_wait_time_s);
-    printf("Average wait time for UNBLOCKED readers: %.4f s\n", average_unblocked_wait_time_s);
+    printf("Average wait time for BLOCKED readers: %.9f s\n", average_blocked_wait_time_s);
+    printf("Average wait time for UNBLOCKED readers: %.9f s\n", average_unblocked_wait_time_s);
 
-    printf("BLOCKED readers waited on average: %.4f s longer than UNBLOCKED readers on average.\n", 
+    printf("BLOCKED readers waited on average: %.9f s longer than UNBLOCKED readers on average.\n", 
            (average_blocked_wait_time_s - average_unblocked_wait_time_s));
 
     pthread_mutex_destroy(&mutex);
