@@ -13,10 +13,10 @@
 #include <fcntl.h>
 #include <errno.h>
 
-#define LOG_FILE          "reader_writer_q3.log"
-#define SHM_DATA          "/rw_data"
-#define SHM_STATE         "/rw_state"
-#define DATA_LEN          256
+#define LOG_FILE "reader_writer_q3.log"
+#define SHM_DATA "/rw_data"
+#define SHM_STATE "/rw_state"
+#define DATA_LEN 256
 #define WRITES_PER_WRITER 5
 
 typedef struct {
@@ -31,12 +31,12 @@ typedef struct {
     bool  terminate;
 } shared_state_t;
 
-static FILE           *logfile     = NULL;
-static char           *shm_data    = NULL;
-static shared_state_t *state       = NULL;
-static int             num_readers = 0;
-static int             num_writers = 0;
-static pthread_t      *reader_tids = NULL;
+static FILE *logfile = NULL;
+static char *shm_data = NULL;
+static shared_state_t *state = NULL;
+static int num_readers = 0;
+static int num_writers = 0;
+static pthread_t *reader_tids = NULL;
 
 static void log_print(const char *fmt, ...) {
     if (!logfile) return;
@@ -62,10 +62,8 @@ static void log_header(void) {
               "ENTITY","EVENT","DATA / NOTE","PID/TID");
     log_divider();
 }
-static void log_row(const char *entity, const char *event,
-                    const char *data, long id) {
-    log_print("| %-10s | %-10s | %-28s | %-10ld |\n",
-              entity, event, data, id);
+static void log_row(const char *entity, const char *event, const char *data, long id) {
+    log_print("| %-10s | %-10s | %-28s | %-10ld |\n", entity, event, data, id);
 }
 
 static void shm_create(void) {
@@ -82,19 +80,18 @@ static void shm_create(void) {
     fd = shm_open(SHM_STATE, O_CREAT|O_RDWR, 0666);
     if (fd < 0) { perror("shm_open STATE"); exit(1); }
     ftruncate(fd, sizeof(shared_state_t));
-    state = mmap(NULL, sizeof(shared_state_t), PROT_READ|PROT_WRITE,
-                 MAP_SHARED, fd, 0);
+    state = mmap(NULL, sizeof(shared_state_t), PROT_READ|PROT_WRITE, MAP_SHARED, fd, 0);
     close(fd);
 
-    sem_init(&state->wrt,       1, 1);
+    sem_init(&state->wrt, 1, 1);
     sem_init(&state->read_gate, 1, 0);
-    sem_init(&state->mutex,     1, 1);
+    sem_init(&state->mutex, 1, 1);
     sem_init(&state->log_mutex, 1, 1);
-    state->numreader    = 0;
+    state->numreader = 0;
     state->writers_done = 0;
-    state->num_writers  = num_writers;
-    state->num_readers  = num_readers;
-    state->terminate    = false;
+    state->num_writers = num_writers;
+    state->num_readers = num_readers;
+    state->terminate = false;
 }
 
 static void shm_open_existing(void) {
@@ -105,8 +102,7 @@ static void shm_open_existing(void) {
 
     fd = shm_open(SHM_STATE, O_RDWR, 0666);
     if (fd < 0) { perror("shm_open STATE child"); exit(1); }
-    state = mmap(NULL, sizeof(shared_state_t), PROT_READ|PROT_WRITE,
-                 MAP_SHARED, fd, 0);
+    state = mmap(NULL, sizeof(shared_state_t), PROT_READ|PROT_WRITE,MAP_SHARED, fd, 0);
     close(fd);
 }
 
@@ -129,8 +125,9 @@ static void sigint_handler(int sig) {
     if (state) {
         state->terminate = true;
         int nr = state->num_readers;
-        for (int i = 0; i < nr; i++)
+        for (int i = 0; i < nr; i++) {
             sem_post(&state->read_gate);
+        }
     }
     if (logfile) {
         fprintf(logfile, "\n[SIGNAL] SIGINT — graceful shutdown initiated\n");
@@ -165,11 +162,9 @@ void *reader_thread(void *arg) {
         if (rc != 0) continue;
         if (state->terminate) break;
 
-        double waited = (t1.tv_sec - t0.tv_sec) +
-                        (t1.tv_nsec - t0.tv_nsec) / 1e9;
+        double waited = (t1.tv_sec - t0.tv_sec) + (t1.tv_nsec - t0.tv_nsec) / 1e9;
         ra->total_wait_s += waited;
 
-        /* Enter — release mutex before potentially blocking on wrt */
         sem_wait(&state->mutex);
         state->numreader++;
         if (state->numreader == 1) {
@@ -186,7 +181,6 @@ void *reader_thread(void *arg) {
         struct timespec work = {0, 2000000};
         nanosleep(&work, NULL);
 
-        /* Exit */
         sem_wait(&state->mutex);
         state->numreader--;
         if (state->numreader == 0) sem_post(&state->wrt);
@@ -219,7 +213,9 @@ static void writer_process(int id) {
         nanosleep(&gap, NULL);
     }
 
-    log_row(wid_str, "DONE", "all writes complete", (long)getpid());
+        char done_note[32];
+        snprintf(done_note, sizeof(done_note), "exited after %d writes", i-1);
+        log_row(wid_str, "DONE", state->terminate ? done_note : "all writes complete", (long)getpid());
 
     /* Termination detection (part f) — release mutex BEFORE posting
      * read_gate to avoid deadlock with readers waiting on mutex */
